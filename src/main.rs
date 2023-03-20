@@ -12,7 +12,7 @@ use clokwerk::{AsyncScheduler, TimeUnits};
 async
 fn main() {
     let mut scheduler = AsyncScheduler::new();
-    scheduler.every(15.seconds()).run(|| async {
+    scheduler.every(1.minutes()).run(|| async {
         handle().await;
     });
 
