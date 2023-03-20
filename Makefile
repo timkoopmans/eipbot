@@ -11,4 +11,4 @@ build:
 	docker compose build
 
 deploy:
-	kubectl apply -f eipbot.yaml
+	kubectl apply -f eipbot.yml
