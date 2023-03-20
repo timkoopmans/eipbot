@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: eipbot
+spec:
+  containers:
+    - name: eipbot
+      image: timkoopmans/eipbot:latest
+      imagePullPolicy: Never
+      env:
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: eipbot-secrets
+              key: aws-access-key-id
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: eipbot-secrets
+              key: aws-secret-access-key
+        - name: SHODAN_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: eipbot-secrets
+              key: shodan-api-key
+        - name: SLACK_WEBHOOK_URL
+          value: "https://hooks.slack.com/services/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"

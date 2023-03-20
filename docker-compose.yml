@@ -1,0 +1,10 @@
+version: "3.9"
+services:
+  bot:
+    build: .
+    environment:
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
+      - SHODAN_API_KEY
+      - SLACK_WEBHOOK_URL
+    image: timkoopmans/eipbot
