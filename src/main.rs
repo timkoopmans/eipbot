@@ -30,7 +30,6 @@ async fn handle() {
 
     if reverse_dns.contains("error") || reverse_dns.contains("amazonaws") || reverse_dns.contains("cloudfront") {
         warn!("No reverse DNS record found");
-        notify(format!("No reverse DNS found for Public IP {}", public_ip), ":zero:");
         release_elastic_ip(&allocation_id).await;
     } else {
         notify(format!("Reverse DNS found {} for Public IP {}", reverse_dns, public_ip), ":fishing_pole_and_fish:");
