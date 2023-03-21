@@ -1,16 +1,19 @@
-use std::env;
-use aws_sdk_ec2::Client;
 use aws_config::meta::region::RegionProviderChain;
+use aws_sdk_ec2::Client;
+use clokwerk::{AsyncScheduler, TimeUnits};
+use paris::{error, info, success, warn};
+use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT};
+use slack_hook::{PayloadBuilder, Slack};
+use std::env;
 use std::error::Error;
 use std::time::Duration;
-use paris::{error, info, success, warn};
-use slack_hook::{Slack, PayloadBuilder};
-use clokwerk::{AsyncScheduler, TimeUnits};
+use tokio::task;
+use trust_dns_resolver::config::*;
+use trust_dns_resolver::Resolver;
 
 #[tokio::main]
-async
-fn main() {
+async fn main() {
     let mut scheduler = AsyncScheduler::new();
     scheduler.every(1.minutes()).run(|| async {
         handle().await;
@@ -26,19 +29,26 @@ async fn handle() {
     let (public_ip, allocation_id) = allocate_elastic_ip().await;
     let shodan_api_key = env::var("SHODAN_API_KEY").expect("Error: SHODAN_API_KEY not found");
 
-    let reverse_dns = reverse_lookup(&public_ip, shodan_api_key).await.unwrap();
+    let hostnames = reverse_lookup(&public_ip, shodan_api_key).await.unwrap();
+    let matches = lookup(hostnames, public_ip.clone()).await.unwrap();
 
-    if reverse_dns.contains("error") || reverse_dns.contains("amazonaws") || reverse_dns.contains("cloudfront") {
-        warn!("No reverse DNS record found");
+    if matches.len() == 0 {
+        info!("No dangling records found for: {}", public_ip);
         release_elastic_ip(&allocation_id).await;
-    } else {
-        notify(format!("Reverse DNS found {} for Public IP {}", reverse_dns, public_ip), ":fishing_pole_and_fish:");
-        success!("Reverse DNS record: {}", reverse_dns);
+    }
+
+    for hostname in matches {
+        success!("Dangling record found {} for {}", hostname, public_ip);
+        notify(
+            format!("Dangling record found on {} for {}", hostname, public_ip),
+            ":fishing_pole_and_fish:",
+        );
     }
 }
 
 fn notify(text: String, icon_emoji: &str) {
-    let slack_webhook_url = env::var("SLACK_WEBHOOK_URL").expect("Error: SLACK_WEBHOOK_URL not found");
+    let slack_webhook_url =
+        env::var("SLACK_WEBHOOK_URL").expect("Error: SLACK_WEBHOOK_URL not found");
     let slack = Slack::new(slack_webhook_url.as_str()).unwrap();
     let p = PayloadBuilder::new()
         .text(text)
@@ -60,7 +70,7 @@ async fn allocate_elastic_ip() -> (String, String) {
     let allocate_response = client.allocate_address().send().await.unwrap();
     let public_ip = allocate_response.public_ip.unwrap();
     let allocation_id = allocate_response.allocation_id.unwrap();
-    info!("Elastic IP address: {}", public_ip);
+    success!("Elastic IP address allocated for: {}", public_ip);
     (public_ip, allocation_id)
 }
 
@@ -69,22 +79,34 @@ async fn release_elastic_ip(allocation_id: &str) {
     let config = aws_config::from_env().region(region_provider).load().await;
     let client = Client::new(&config);
 
-    let release_response = client.release_address().allocation_id(allocation_id).send().await;
+    let release_response = client
+        .release_address()
+        .allocation_id(allocation_id)
+        .send()
+        .await;
     if release_response.is_err() {
-        error!("Error releasing Elastic IP address: {}", release_response.err().unwrap());
+        error!(
+            "Error releasing Elastic IP address: {}",
+            release_response.err().unwrap()
+        );
     } else {
-        success!("Elastic IP address released for allocation ID: {}", allocation_id);
+        success!(
+            "Elastic IP address released for allocation ID: {}",
+            allocation_id
+        );
     }
 }
 
-async fn reverse_lookup(ip: &str, api_key: String) -> Result<String, Box<dyn Error>> {
-    let url = format!("https://api.shodan.io/shodan/host/{}", ip);
+async fn reverse_lookup(public_ip: &str, api_key: String) -> Result<Vec<String>, Box<dyn Error>> {
+    let url = format!("https://api.shodan.io/shodan/host/{}", public_ip);
 
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
 
-    let client = reqwest::Client::builder().default_headers(headers).build()?;
-    let res = client
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()?;
+    let response = client
         .get(&url)
         .query(&[("key", api_key)])
         .send()
@@ -92,5 +114,80 @@ async fn reverse_lookup(ip: &str, api_key: String) -> Result<String, Box<dyn Err
         .text()
         .await?;
 
-    Ok(res)
+    let reverse_dns: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+    let hostnames = reverse_dns["hostnames"].as_array();
+
+    return if hostnames.is_none() {
+        warn!("No reverse DNS hostnames found for: {}", public_ip);
+        Ok(vec![])
+    } else {
+        let hostnames = hostnames.unwrap();
+        let results = hostnames
+            .iter()
+            .map(|x| x.as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        info!(
+            "Reverse DNS hostnames found for: {} on {:?}",
+            public_ip, results
+        );
+        Ok(results)
+    };
+}
+
+async fn lookup(hostnames: Vec<String>, public_ip: String) -> Result<Vec<String>, Box<dyn Error>> {
+    let resolver = Resolver::new(ResolverConfig::default(), ResolverOpts::default()).unwrap();
+
+    let results = task::spawn_blocking(move || {
+        let mut matches: Vec<String> = Vec::new();
+        let blacklist = Regex::new(r"amazonaws|cloudfront").unwrap();
+
+        for hostname in hostnames {
+            if blacklist.is_match(&hostname) {
+                continue;
+            }
+            let response = resolver.lookup_ip(hostname.clone());
+            let ips = response
+                .unwrap()
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>();
+            if ips.contains(&public_ip) {
+                info!("Lookup match for {}", hostname);
+                matches.push(hostname);
+            }
+        }
+        matches
+    })
+    .await
+    .unwrap();
+
+    Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_reverse_lookup() {
+        let public_ip = "8.8.8.8";
+        let api_key = env::var("SHODAN_API_KEY").expect("Error: SHODAN_API_KEY not found");
+        let hostnames = reverse_lookup(public_ip, api_key).await.unwrap();
+        assert_eq!(hostnames, vec!["dns.google".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_lookup() {
+        let hostnames = vec!["dns.google".to_string()];
+        let matches = lookup(hostnames, "8.8.8.8".to_string()).await.unwrap();
+        assert_eq!(matches, vec!["dns.google".to_string()])
+    }
+
+    #[tokio::test]
+    async fn test_lookup_blacklist() {
+        let hostnames = vec!["ec2-3-104-203-50.ap-southeast-2.compute.amazonaws.com".to_string()];
+        let matches = lookup(hostnames, "3.104.203.50".to_string()).await.unwrap();
+        assert_eq!(matches, [] as [String; 0])
+    }
 }

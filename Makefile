@@ -12,3 +12,6 @@ build:
 
 deploy:
 	kubectl apply -f eipbot.yml
+
+restart:
+	kubectl restart eipbot
