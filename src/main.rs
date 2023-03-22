@@ -147,22 +147,32 @@ async fn lookup(hostnames: Vec<String>, public_ip: String) -> Result<Vec<String>
                 continue;
             }
             let response = resolver.lookup_ip(hostname.clone());
-            let ips = response
-                .unwrap()
-                .iter()
-                .map(|x| x.to_string())
-                .collect::<Vec<_>>();
-            if ips.contains(&public_ip) {
-                info!("Lookup match for {}", hostname);
-                matches.push(hostname);
+            if response.is_err() {
+                error!("Error performing lookup: {}", response.err().unwrap());
+                continue;
+            } else {
+                info!("Lookup successful for {}", hostname);
+                let ips = response
+                    .unwrap()
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>();
+                if ips.contains(&public_ip) {
+                    info!("Lookup match for {}", hostname);
+                    matches.push(hostname);
+                }
             }
         }
         matches
     })
-    .await
-    .unwrap();
+    .await;
 
-    Ok(results)
+    if results.is_err() {
+        error!("Error performing lookup: {}", results.err().unwrap());
+        Ok(Vec::from([] as [String; 0]))
+    } else {
+        Ok(results.unwrap())
+    }
 }
 
 #[cfg(test)]
@@ -182,6 +192,13 @@ mod tests {
         let hostnames = vec!["dns.google".to_string()];
         let matches = lookup(hostnames, "8.8.8.8".to_string()).await.unwrap();
         assert_eq!(matches, vec!["dns.google".to_string()])
+    }
+
+    #[tokio::test]
+    async fn test_lookup_failing() {
+        let hostnames = vec!["akamai-inputs-prod-ndia.splunkcloud.com.".to_string()];
+        let matches = lookup(hostnames, "8.8.8.8".to_string()).await.unwrap();
+        assert_eq!(matches, [] as [String; 0])
     }
 
     #[tokio::test]
