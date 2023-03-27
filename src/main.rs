@@ -1,5 +1,5 @@
 use aws_config::meta::region::RegionProviderChain;
-use aws_sdk_ec2::Client;
+use aws_sdk_ec2::Client as EC2Client;
 use clokwerk::{AsyncScheduler, TimeUnits};
 use paris::{error, info, success, warn};
 use regex::Regex;
@@ -29,7 +29,11 @@ async fn handle() {
     let (public_ip, allocation_id) = allocate_elastic_ip().await;
     let shodan_api_key = env::var("SHODAN_API_KEY").expect("Error: SHODAN_API_KEY not found");
 
-    let hostnames = reverse_lookup(&public_ip, shodan_api_key).await.unwrap();
+    let hostname_shodan = shodan_lookup(&public_ip, shodan_api_key).await.unwrap();
+    let hostnames_reverse = reverse_lookup(public_ip.clone()).await.unwrap();
+    let mut hostnames = hostname_shodan;
+    hostnames.append(&mut hostnames_reverse.clone());
+
     let matches = lookup(hostnames, public_ip.clone()).await.unwrap();
 
     if matches.len() == 0 {
@@ -66,7 +70,7 @@ fn notify(text: String, icon_emoji: &str) {
 async fn allocate_elastic_ip() -> (String, String) {
     let region_provider = RegionProviderChain::default_provider().or_else("ap-southeast-2");
     let config = aws_config::from_env().region(region_provider).load().await;
-    let client = Client::new(&config);
+    let client = EC2Client::new(&config);
     let allocate_response = client.allocate_address().send().await.unwrap();
     let public_ip = allocate_response.public_ip.unwrap();
     let allocation_id = allocate_response.allocation_id.unwrap();
@@ -77,7 +81,7 @@ async fn allocate_elastic_ip() -> (String, String) {
 async fn release_elastic_ip(allocation_id: &str) {
     let region_provider = RegionProviderChain::default_provider().or_else("ap-southeast-2");
     let config = aws_config::from_env().region(region_provider).load().await;
-    let client = Client::new(&config);
+    let client = EC2Client::new(&config);
 
     let release_response = client
         .release_address()
@@ -97,7 +101,7 @@ async fn release_elastic_ip(allocation_id: &str) {
     }
 }
 
-async fn reverse_lookup(public_ip: &str, api_key: String) -> Result<Vec<String>, Box<dyn Error>> {
+async fn shodan_lookup(public_ip: &str, api_key: String) -> Result<Vec<String>, Box<dyn Error>> {
     let url = format!("https://api.shodan.io/shodan/host/{}", public_ip);
 
     let mut headers = HeaderMap::new();
@@ -133,6 +137,34 @@ async fn reverse_lookup(public_ip: &str, api_key: String) -> Result<Vec<String>,
         );
         Ok(results)
     };
+}
+
+async fn reverse_lookup(public_ip: String) -> Result<Vec<String>, Box<dyn Error>> {
+    let resolver = Resolver::new(ResolverConfig::default(), ResolverOpts::default()).unwrap();
+
+    let results = task::spawn_blocking(move || {
+        let public_ip = public_ip.clone();
+        let response = resolver.reverse_lookup(public_ip.parse().unwrap());
+        if response.is_err() {
+            error!(
+                "Error performing reverse lookup: {}",
+                response.err().unwrap()
+            );
+            return vec![];
+        } else {
+            info!("Reverse lookup successful for {}", public_ip);
+            let hostnames = response
+                .unwrap()
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>();
+            return hostnames;
+        }
+    })
+    .await
+    .unwrap();
+
+    return Ok(results);
 }
 
 async fn lookup(hostnames: Vec<String>, public_ip: String) -> Result<Vec<String>, Box<dyn Error>> {
@@ -180,10 +212,10 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_reverse_lookup() {
+    async fn test_shodan_lookup() {
         let public_ip = "8.8.8.8";
         let api_key = env::var("SHODAN_API_KEY").expect("Error: SHODAN_API_KEY not found");
-        let hostnames = reverse_lookup(public_ip, api_key).await.unwrap();
+        let hostnames = shodan_lookup(public_ip, api_key).await.unwrap();
         assert_eq!(hostnames, vec!["dns.google".to_string()]);
     }
 
@@ -192,6 +224,13 @@ mod tests {
         let hostnames = vec!["dns.google".to_string()];
         let matches = lookup(hostnames, "8.8.8.8".to_string()).await.unwrap();
         assert_eq!(matches, vec!["dns.google".to_string()])
+    }
+
+    #[tokio::test]
+    async fn test_reverse_lookup() {
+        let public_ip = "8.8.8.8";
+        let hostnames = reverse_lookup(public_ip.to_string()).await.unwrap();
+        assert_eq!(hostnames, vec!["dns.google.".to_string()])
     }
 
     #[tokio::test]
