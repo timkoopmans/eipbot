@@ -42,10 +42,7 @@ async fn handle() {
 
         let count_elastic_ip = count_elastic_ip(&region).await;
         if count_elastic_ip > 0 {
-            notify(
-                format!("{} Elastic IP(s) found in {}", count_elastic_ip, region),
-                ":warning:",
-            );
+            warn!("{} Elastic IP(s) found in {}", count_elastic_ip, region);
             continue;
         }
 
@@ -107,11 +104,6 @@ async fn count_elastic_ip(region: &String) -> u8 {
     let describe_response = client.describe_addresses().send().await.unwrap();
     let addresses = describe_response.addresses.unwrap();
     let count = addresses.len() as u8;
-    if count > 0 {
-        warn!("Elastic IP addresses in {}: {}", region, count);
-    } else {
-        info!("Elastic IP addresses in {}: {}", region, count);
-    }
     count
 }
 
@@ -185,8 +177,9 @@ async fn shodan_lookup(public_ip: &str, api_key: String) -> Result<Vec<String>, 
             .map(|x| x.as_str().unwrap().to_string())
             .collect::<Vec<_>>();
         info!(
-            "Reverse DNS hostnames found for: {} on {:?}",
-            public_ip, results
+            "Reverse DNS hostnames found for: {} on {}",
+            public_ip,
+            results.join(", ")
         );
         Ok(results)
     };
