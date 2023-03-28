@@ -13,6 +13,5 @@ COPY . .
 RUN cargo build --release --bin eipbot
 
 FROM gcr.io/distroless/cc
-WORKDIR app
-COPY --from=builder /app/target/release/eipbot /usr/local/bin
-ENTRYPOINT ["/usr/local/bin/eipbot"]
+COPY --from=builder /app/target/release/eipbot /usr/bin/eipbot
+CMD ["/usr/bin/eipbot"]
