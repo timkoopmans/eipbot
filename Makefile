@@ -13,5 +13,5 @@ build:
 deploy:
 	kubectl apply -f eipbot.yml
 
-restart:
+replace:
 	kubectl get pod eipbot -o yaml | kubectl replace --force -f -

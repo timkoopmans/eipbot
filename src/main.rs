@@ -1,7 +1,7 @@
 use aws_config::meta::region::RegionProviderChain;
-use aws_sdk_ec2::Client as EC2Client;
+use aws_sdk_ec2::{Client as EC2Client, Region};
 use clokwerk::{AsyncScheduler, TimeUnits};
-use paris::{error, info, success, warn};
+use paris::{error, info, success};
 use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT};
 use slack_hook::{PayloadBuilder, Slack};
@@ -15,7 +15,7 @@ use trust_dns_resolver::Resolver;
 #[tokio::main]
 async fn main() {
     let mut scheduler = AsyncScheduler::new();
-    scheduler.every(1.minutes()).run(|| async {
+    scheduler.every(2.minutes()).run(|| async {
         handle().await;
     });
 
@@ -26,27 +26,42 @@ async fn main() {
 }
 
 async fn handle() {
-    let (public_ip, allocation_id) = allocate_elastic_ip().await;
-    let shodan_api_key = env::var("SHODAN_API_KEY").expect("Error: SHODAN_API_KEY not found");
+    let regions = vec![
+        "us-east-2",
+        "us-west-2",
+        "eu-west-1",
+        "eu-west-2",
+        "eu-west-3",
+        "eu-central-1",
+        "ap-southeast-1",
+        "ap-southeast-2",
+    ];
 
-    let hostname_shodan = shodan_lookup(&public_ip, shodan_api_key).await.unwrap();
-    let hostnames_reverse = reverse_lookup(public_ip.clone()).await.unwrap();
-    let mut hostnames = hostname_shodan;
-    hostnames.append(&mut hostnames_reverse.clone());
+    for region in regions {
+        let region = region.to_string();
+        let region = region.clone();
+        let (public_ip, allocation_id) = allocate_elastic_ip(&region).await;
+        let shodan_api_key = env::var("SHODAN_API_KEY").expect("Error: SHODAN_API_KEY not found");
 
-    let matches = lookup(hostnames, public_ip.clone()).await.unwrap();
+        let hostname_shodan = shodan_lookup(&public_ip, shodan_api_key).await.unwrap();
+        let hostnames_reverse = reverse_lookup(public_ip.clone()).await.unwrap();
+        let mut hostnames = hostname_shodan;
+        hostnames.append(&mut hostnames_reverse.clone());
 
-    if matches.len() == 0 {
-        info!("No dangling records found for: {}", public_ip);
-        release_elastic_ip(&allocation_id).await;
-    }
+        let matches = lookup(hostnames, public_ip.clone()).await.unwrap();
 
-    for hostname in matches {
-        success!("Dangling record found {} for {}", hostname, public_ip);
-        notify(
-            format!("Dangling record found on {} for {}", hostname, public_ip),
-            ":fishing_pole_and_fish:",
-        );
+        if matches.len() == 0 {
+            info!("No dangling records found for: {}", public_ip);
+            release_elastic_ip(&region, &allocation_id).await;
+        }
+
+        for hostname in matches {
+            success!("Dangling record found {} for {}", hostname, public_ip);
+            notify(
+                format!("Dangling record found on {} for {}", hostname, public_ip),
+                ":fishing_pole_and_fish:",
+            );
+        }
     }
 }
 
@@ -67,19 +82,24 @@ fn notify(text: String, icon_emoji: &str) {
     }
 }
 
-async fn allocate_elastic_ip() -> (String, String) {
-    let region_provider = RegionProviderChain::default_provider().or_else("ap-southeast-2");
+async fn allocate_elastic_ip(region: &String) -> (String, String) {
+    let provider = Some(Region::new(region.clone()));
+    let region_provider = RegionProviderChain::first_try(provider).or_default_provider();
     let config = aws_config::from_env().region(region_provider).load().await;
     let client = EC2Client::new(&config);
     let allocate_response = client.allocate_address().send().await.unwrap();
     let public_ip = allocate_response.public_ip.unwrap();
     let allocation_id = allocate_response.allocation_id.unwrap();
-    success!("Elastic IP address allocated for: {}", public_ip);
+    info!(
+        "Elastic IP address allocated in {} for: {}",
+        region, public_ip
+    );
     (public_ip, allocation_id)
 }
 
-async fn release_elastic_ip(allocation_id: &str) {
-    let region_provider = RegionProviderChain::default_provider().or_else("ap-southeast-2");
+async fn release_elastic_ip(region: &String, allocation_id: &str) {
+    let provider = Some(Region::new(region.clone()));
+    let region_provider = RegionProviderChain::first_try(provider).or_default_provider();
     let config = aws_config::from_env().region(region_provider).load().await;
     let client = EC2Client::new(&config);
 
@@ -94,9 +114,9 @@ async fn release_elastic_ip(allocation_id: &str) {
             release_response.err().unwrap()
         );
     } else {
-        success!(
-            "Elastic IP address released for allocation ID: {}",
-            allocation_id
+        info!(
+            "Elastic IP address released in {} for allocation ID: {}",
+            region, allocation_id
         );
     }
 }
@@ -123,7 +143,7 @@ async fn shodan_lookup(public_ip: &str, api_key: String) -> Result<Vec<String>, 
     let hostnames = reverse_dns["hostnames"].as_array();
 
     return if hostnames.is_none() {
-        warn!("No reverse DNS hostnames found for: {}", public_ip);
+        info!("No reverse DNS hostnames found for: {}", public_ip);
         Ok(vec![])
     } else {
         let hostnames = hostnames.unwrap();
@@ -145,12 +165,12 @@ async fn reverse_lookup(public_ip: String) -> Result<Vec<String>, Box<dyn Error>
     let results = task::spawn_blocking(move || {
         let public_ip = public_ip.clone();
         let response = resolver.reverse_lookup(public_ip.parse().unwrap());
-        if response.is_err() {
+        return if response.is_err() {
             error!(
                 "Error performing reverse lookup: {}",
                 response.err().unwrap()
             );
-            return vec![];
+            vec![]
         } else {
             info!("Reverse lookup successful for {}", public_ip);
             let hostnames = response
@@ -158,8 +178,8 @@ async fn reverse_lookup(public_ip: String) -> Result<Vec<String>, Box<dyn Error>
                 .iter()
                 .map(|x| x.to_string())
                 .collect::<Vec<_>>();
-            return hostnames;
-        }
+            hostnames
+        };
     })
     .await
     .unwrap();
