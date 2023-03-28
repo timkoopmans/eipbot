@@ -1,7 +1,7 @@
 use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_ec2::{Client as EC2Client, Region};
 use clokwerk::{AsyncScheduler, TimeUnits};
-use paris::{error, info, success};
+use paris::{error, info, success, warn};
 use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT};
 use slack_hook::{PayloadBuilder, Slack};
@@ -39,7 +39,16 @@ async fn handle() {
 
     for region in regions {
         let region = region.to_string();
-        let region = region.clone();
+
+        let count_elastic_ip = count_elastic_ip(&region).await;
+        if count_elastic_ip > 0 {
+            notify(
+                format!("{} Elastic IP(s) found in {}", count_elastic_ip, region),
+                ":warning:",
+            );
+            continue;
+        }
+
         let (public_ip, allocation_id) = allocate_elastic_ip(&region).await;
         let shodan_api_key = env::var("SHODAN_API_KEY").expect("Error: SHODAN_API_KEY not found");
 
@@ -56,9 +65,17 @@ async fn handle() {
         }
 
         for hostname in matches {
-            success!("Dangling record found {} for {}", hostname, public_ip);
+            success!(
+                "Dangling record found in {} on {} for {}",
+                region,
+                hostname,
+                public_ip
+            );
             notify(
-                format!("Dangling record found on {} for {}", hostname, public_ip),
+                format!(
+                    "Dangling record found in {} on {} for {}",
+                    region, hostname, public_ip
+                ),
                 ":fishing_pole_and_fish:",
             );
         }
@@ -80,6 +97,22 @@ fn notify(text: String, icon_emoji: &str) {
     if res.is_err() {
         error!("Error sending Slack message: {}", res.err().unwrap());
     }
+}
+
+async fn count_elastic_ip(region: &String) -> u8 {
+    let provider = Some(Region::new(region.clone()));
+    let region_provider = RegionProviderChain::first_try(provider).or_default_provider();
+    let config = aws_config::from_env().region(region_provider).load().await;
+    let client = EC2Client::new(&config);
+    let describe_response = client.describe_addresses().send().await.unwrap();
+    let addresses = describe_response.addresses.unwrap();
+    let count = addresses.len() as u8;
+    if count > 0 {
+        warn!("Elastic IP addresses in {}: {}", region, count);
+    } else {
+        info!("Elastic IP addresses in {}: {}", region, count);
+    }
+    count
 }
 
 async fn allocate_elastic_ip(region: &String) -> (String, String) {
