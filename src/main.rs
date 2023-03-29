@@ -163,7 +163,14 @@ async fn shodan_lookup(public_ip: &str, api_key: String) -> Result<Vec<String>, 
         .text()
         .await?;
 
-    let reverse_dns: serde_json::Value = serde_json::from_str(&response).unwrap();
+    let reverse_dns: serde_json::Value = serde_json::from_str(&response).unwrap_or_else(|_| {
+        error!("Error parsing Shodan response for: {}", public_ip);
+        serde_json::Value::Null
+    });
+
+    if reverse_dns.is_null() {
+        return Ok(vec![]);
+    }
 
     let hostnames = reverse_dns["hostnames"].as_array();
 
