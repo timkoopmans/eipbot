@@ -24,4 +24,7 @@ spec:
               name: eipbot-secrets
               key: shodan-api-key
         - name: SLACK_WEBHOOK_URL
-          value: "https://hooks.slack.com/services/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"
+          valueFrom:
+            secretKeyRef:
+              name: eipbot-secrets
+              key: slack-webhook-url
