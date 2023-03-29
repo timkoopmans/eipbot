@@ -292,4 +292,12 @@ mod tests {
         let matches = lookup(hostnames, "3.104.203.50".to_string()).await.unwrap();
         assert_eq!(matches, [] as [String; 0])
     }
+
+    #[tokio::test]
+    async fn test_notify() {
+        notify(
+            format!("Testing {} on {} for {}", "region", "hostname", "public_ip"),
+            ":fishing_pole_and_fish:",
+        );
+    }
 }
