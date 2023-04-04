@@ -15,3 +15,4 @@ deploy:
 
 replace:
 	kubectl get pod eipbot -o yaml | kubectl replace --force -f -
+	kubectl get pod eipbot-slack -o yaml | kubectl replace --force -f -

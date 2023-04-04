@@ -8,3 +8,10 @@ services:
       - SHODAN_API_KEY
       - SLACK_WEBHOOK_URL
     image: timkoopmans/eipbot
+  slackbot:
+    build: ./slack
+    environment:
+      - SLACK_BOT_TOKEN
+      - SLACK_APP_TOKEN
+      - PYTHONUNBUFFERED
+    image: timkoopmans/eipbot-slack

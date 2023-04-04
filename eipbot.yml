@@ -28,3 +28,36 @@ spec:
             secretKeyRef:
               name: eipbot-secrets
               key: slack-webhook-url
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: eipbot-slack
+spec:
+  containers:
+    - name: eipbot-slack
+      image: timkoopmans/eipbot-slack:latest
+      imagePullPolicy: Never
+      env:
+        - name: SLACK_BOT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: eipbot-secrets
+              key: slack-bot-token
+        - name: SLACK_APP_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: eipbot-secrets
+              key: slack-app-token
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: eipbot-secrets
+              key: aws-access-key-id
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: eipbot-secrets
+              key: aws-secret-access-key
+        - name: PYTHONUNBUFFERED
+          value: "1"

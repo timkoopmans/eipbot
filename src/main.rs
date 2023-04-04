@@ -63,15 +63,19 @@ async fn handle() {
 
         for hostname in matches {
             success!(
-                "Dangling record found in {} on {} for {}",
+                "Dangling record found in {} on {} for {} (allocation ID: {})",
                 region,
                 hostname,
-                public_ip
+                public_ip,
+                allocation_id
             );
             notify(
                 format!(
-                    "Dangling record found in {} on {} for {}",
-                    region, hostname, public_ip
+                    "Dangling record found in {} on {} for {} (allocation ID: {})",
+                    region,
+                    hostname,
+                    public_ip,
+                    allocation_id
                 ),
                 ":fishing_pole_and_fish:",
             );
@@ -85,7 +89,7 @@ fn notify(text: String, icon_emoji: &str) {
     let slack = Slack::new(slack_webhook_url.as_str()).unwrap();
     let p = PayloadBuilder::new()
         .text(text)
-        .channel("#bots")
+        .channel("#eips")
         .username("EIP Bot")
         .icon_emoji(icon_emoji)
         .build()
@@ -303,7 +307,7 @@ mod tests {
     #[tokio::test]
     async fn test_notify() {
         notify(
-            format!("Testing {} on {} for {}", "region", "hostname", "public_ip"),
+            format!("Dangling record found in {} on {} for {} (allocation ID: {})", "eu-west-3", "sites.hotelintelligence.io", "35.181.158.111", "eipalloc-0885edba58eb827e3"),
             ":fishing_pole_and_fish:",
         );
     }
